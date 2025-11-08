@@ -1,5 +1,5 @@
 export function Name() { return "Adalight"; }
-export function Version() { return "1.0.0"; }
+export function Version() { return "1.0.1"; }
 export function Type() { return "serial"; }
 export function Publisher() { return "SignalRGB"; }
 export function Size() { return [60, 1]; }
