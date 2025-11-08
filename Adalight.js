@@ -2,13 +2,13 @@ export function Name() { return "Adalight"; }
 export function Version() { return "1.0.0"; }
 export function Type() { return "serial"; }
 export function Publisher() { return "SignalRGB"; }
-export function Size() { return [1, 120]; }
-export function DefaultPosition() { return [75, 70]; }
+export function Size() { return [60, 1]; }
+export function DefaultPosition() { return [20, 95]; }
 export function DefaultScale() { return 1.0; }
 
 export function ControllableParameters(){
   return [
-      {"property":"g_iLEDCount", "label":"LED Count", "step":"1", "type":"number","min":"1", "max":"120","default":"120"},
+      {"property":"g_iLEDCount", "label":"LED Count", "step":"1", "type":"number","min":"1", "max":"120","default":"60"},
       {"property":"g_iBaudRate", "label":"Baud Rate", "type":"combobox", "values":["115200", "460800", "500000"], "default":"115200"},
       {"property":"g_sPort", "label":"Serial Port", "type":"text", "default":"COM4"}
   ];
@@ -20,37 +20,59 @@ controller:readonly
 const MAX_LEDS = 120;
 let serialPort = "";
 let serialBaudRate = 115200;
-let ledCount = 120;
+let ledCount = 60;
 let serialInitialized = false;
 
 export function Initialize() {
-	device.setName(controller.name || "Adalight");
-	
-	device.addFeature("serial");
-	
-	serialPort = g_sPort || "COM4";
-	serialBaudRate = parseInt(g_iBaudRate) || 115200;
-	ledCount = Math.min(MAX_LEDS, Math.max(1, parseInt(g_iLEDCount) || 120));
-	
-	device.log("Initializing Adalight on " + serialPort + " at " + serialBaudRate + " baud");
-	device.log("LED Count: " + ledCount);
-	
-	// Set image
-	device.setImageFromUrl(controller.image || "https://assets.signalrgb.com/devices/brands/adalight/misc/led-strip.png");
-	
-	// Initialize serial connection
 	try {
-		serial.open(serialPort, serialBaudRate);
-		serialInitialized = true;
-		device.log("Serial port opened successfully");
+		device.log("=== Adalight Initialize Start ===");
+		device.setName(controller.name || "Adalight");
+		
+		device.log("Adding serial feature...");
+		device.addFeature("serial");
+		
+		serialPort = g_sPort || "COM4";
+		serialBaudRate = parseInt(g_iBaudRate) || 115200;
+		ledCount = Math.min(MAX_LEDS, Math.max(1, parseInt(g_iLEDCount) || 60));
+		
+		device.log("Initializing Adalight on " + serialPort + " at " + serialBaudRate + " baud");
+		device.log("LED Count: " + ledCount);
+		
+		// Set image
+		if (controller && controller.image) {
+			device.setImageFromUrl(controller.image);
+		}
+		
+		// Check if serial object exists
+		if (typeof serial === 'undefined') {
+			device.log("ERROR: Serial object is undefined!");
+			serialInitialized = false;
+			return;
+		}
+		
+		device.log("Serial object found, attempting to open port...");
+		
+		// Initialize serial connection
+		try {
+			serial.open(serialPort, serialBaudRate);
+			serialInitialized = true;
+			device.log("Serial port opened successfully on " + serialPort);
+		} catch (e) {
+			device.log("Failed to open serial port: " + e.toString());
+			device.log("Error details: " + JSON.stringify(e));
+			serialInitialized = false;
+		}
+		
+		device.log("=== Adalight Initialize Complete ===");
 	} catch (e) {
-		device.log("Failed to open serial port: " + e);
+		device.log("CRITICAL ERROR in Initialize: " + e.toString());
+		device.log("Stack: " + (e.stack || "No stack trace"));
 		serialInitialized = false;
 	}
 }
 
 function SendAdalightData() {
-	if (!serialInitialized) {
+	if (!serialInitialized || typeof serial === 'undefined') {
 		return;
 	}
 	
@@ -83,12 +105,15 @@ function SendAdalightData() {
 		packet.push(checksum);
 		
 		// RGB data for each LED
+		// LEDs arranged horizontally: LED 0 = bottom right, LED N-1 = bottom left
+		// Size() returns [60, 1], so device is 60 pixels wide and 1 pixel tall
 		for (let i = 0; i < numLeds; i++) {
 			// Map LED index to device coordinates
-			// Size() returns [1, 120], so device is 1 pixel wide and 120 pixels tall
-			// Map LED index linearly to Y coordinate
-			const y = Math.floor((i / numLeds) * 120);
-			const color = device.color(0, y);
+			// LED 0 = rightmost (x = numLeds - 1), LED N-1 = leftmost (x = 0)
+			// All LEDs are at the bottom (y = 0)
+			const x = numLeds - 1 - i; // Reverse mapping: right to left
+			const y = 0; // Bottom row
+			const color = device.color(x, y);
 			
 			// Adalight expects RGB order
 			packet.push(Math.floor(color.r * 255));
@@ -97,16 +122,22 @@ function SendAdalightData() {
 		}
 		
 		// Send packet
-		serial.write(packet);
+		if (typeof serial.write === 'function') {
+			serial.write(packet);
+		} else {
+			device.log("ERROR: serial.write is not a function!");
+			serialInitialized = false;
+		}
 		
 	} catch (e) {
-		device.log("Error sending Adalight data: " + e);
+		device.log("Error sending Adalight data: " + e.toString());
+		device.log("Error stack: " + (e.stack || "No stack"));
 		serialInitialized = false;
 	}
 }
 
 function SyncLEDCount() {
-	const newCount = Math.min(MAX_LEDS, Math.max(1, parseInt(g_iLEDCount) || 120));
+	const newCount = Math.min(MAX_LEDS, Math.max(1, parseInt(g_iLEDCount) || 60));
 	if (newCount !== ledCount) {
 		ledCount = newCount;
 		device.log("LED count changed to: " + ledCount);
@@ -192,12 +223,29 @@ function Blackout() {
 }
 
 export function Render() {
-	SyncLEDCount();
-	SyncBaudRate();
-	SyncPort();
-	
-	if (serialInitialized) {
-		SendAdalightData();
+	try {
+		SyncLEDCount();
+		SyncBaudRate();
+		SyncPort();
+		
+		if (serialInitialized && typeof serial !== 'undefined') {
+			SendAdalightData();
+		} else if (!serialInitialized) {
+			// Try to reinitialize if not initialized
+			if (typeof serial !== 'undefined') {
+				try {
+					serialPort = g_sPort || "COM4";
+					serialBaudRate = parseInt(g_iBaudRate) || 115200;
+					serial.open(serialPort, serialBaudRate);
+					serialInitialized = true;
+					device.log("Serial port reinitialized successfully");
+				} catch (e) {
+					// Silently fail to avoid spam
+				}
+			}
+		}
+	} catch (e) {
+		device.log("Error in Render: " + e.toString());
 	}
 }
 
